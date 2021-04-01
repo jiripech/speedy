@@ -5,24 +5,28 @@ const convertHrtime = require('convert-hrtime');
 
 const settings = {
   SPEEDY_DB_HOST: process.env.SPEEDY_DB_HOST,
-  SPEEDY_DB_NAME: process.env.INFLUXDB_DB,
-  SPEEDY_DB_PORT: process.env.INFLUXDB_HTTP_BIND_ADDRESS || 8086,
+  SPEEDY_DB_NAME: process.env.SPEEDY_DB_NAME,
+  SPEEDY_DB_PORT: process.env.SPEEDY_DB_PORT || 8086,
   SPEEDY_INTERVAL: process.env.SPEEDY_INTERVAL || '* * * * *',
-  SPEEDY_MAX_TIME: process.env.SPEEDY_MAX_TIME || 5000
+  SPEEDY_MAX_TIME: process.env.SPEEDY_MAX_TIME || 50000,
+  SPEEDY_DEBUG: process.env.SPEEDY_DEBUG || false
 };
 
 const influx = new Influx.InfluxDB({
   host: settings.SPEEDY_DB_HOST,
-  database: settings.SPEEDY_DB_NAME,
+  database: settings.SPEEDY_DB_NAME || 'speedy',
   schema: [
     {
-      measurement: 'speed_test',
+      measurement: 'speedtest',
       fields: {
         download: Influx.FieldType.INTEGER,
         upload: Influx.FieldType.INTEGER,
         originalUpload: Influx.FieldType.INTEGER,
         originalDownload: Influx.FieldType.INTEGER,
-        executionTime: Influx.FieldType.FLOAT
+        executionTime: Influx.FieldType.FLOAT,
+        jitter: Influx.FieldType.FLOAT,
+        latency: Influx.FieldType.FLOAT,
+        packetLoss: Influx.FieldType.FLOAT
       },
       tags: [
         'interval',
@@ -33,75 +37,73 @@ const influx = new Influx.InfluxDB({
   ]
 });
 
-console.log('speedy settings:', settings);
+console.log('Speedy settings:', settings);
 
-// run it every minute
+// run it every minute                                                                  
 schedule.scheduleJob(settings.SPEEDY_INTERVAL, () => {
   runSpeedTest();
 });
 
-// Just for debugging purposes
-// run it every 10 seconds
-// setInterval(run, 10000);
-
-function runSpeedTest() {
-  let t = process.hrtime();
-  const test = speedTest({maxTime: settings.SPEEDY_MAX_TIME});
-
-  test.on('data', data => {
-    // console.dir(data);
-
-    influx.getDatabaseNames()
-      .then(names => {
-        if (!names.includes(settings.SPEEDY_DB_NAME)) {
-          return influx.createDatabase(settings.SPEEDY_DB_NAME);
-        }
-      })
-      .then(() => {
-        let t1 = process.hrtime(t);
-        influx
-          .writePoints([
-            {
-              measurement: 'speed_test',
-              fields: {
-                download: data.speeds.download,
-                upload: data.speeds.upload,
-                originalUpload: data.speeds.originalUpload,
-                originalDownload: data.speeds.originalDownload,
-                executionTime: convertHrtime(t1).s
-              },
-              tags: {
-                interval: settings.SPEEDY_INTERVAL,
-                isp: data.client.isp,
-                host: data.server.host
-              }
-            }
-          ])
-          // Todo: Remove, just for debugging purposes
-          .then(() => {
-            return influx.query(`
-              select * from speed_test
-              order by time desc
-              limit 1
-            `);
-          })
-          .then(rows => {
-            rows.forEach(row => console.log({Download: row.download, Upload: row.upload, ExecutionTime: row.executionTime}));
-            // Log the entire entry (for debugging purposes)
-            // rows.forEach(row => console.log(row));
-          });
-      });
-
-  });
-
-  // test.on('done', data => {
-  //     console.log('done');
-  //     console.dir(data);
-  // });
-
-  test.on('error', err => {
-    console.error('An error occurred performing the test', err);
-  });
-
+function progress(event) {
+  if (settings.SPEEDY_DEBUG) {
+    if (event.type == 'log') {
+      console.dir(event);
+    }
+    if (event.type == 'testStart') {
+      influx.getDatabaseNames()
+        .then(names => {
+          if (!names.includes(settings.SPEEDY_DB_NAME)) {
+            console.log(influx.createDatabase(settings.SPEEDY_DB_NAME));
+          }
+        });
+      console.dir(event);
+    }
+  }
 }
 
+function writeData(data, timeTotal) {
+  influx.writePoints([{
+    measurement: 'speedtest',
+    fields: {
+      download: data.download.bandwidth,
+      upload: data.upload.bandwidth,
+      originalUpload: data.upload.bytes,
+      originalDownload: data.download.bytes,
+      executionTime: convertHrtime(timeTotal).s,
+      jitter: data.ping.jitter,
+      latency: data.ping.latency,
+      packetLoss: data.packetLoss
+    },
+    tags: {
+      interval: settings.SPEEDY_INTERVAL,
+      isp: data.isp,
+      host: data.server.host
+    }
+  }]).catch(err => {
+    console.error('Error writing to InfluxDB:', err);
+  });
+}
+
+async function runSpeedTest() {
+  const t = process.hrtime();
+  let data = null;
+
+  const cancel = speedTest.makeCancel();
+  setTimeout(cancel, settings.SPEEDY_MAX_TIME);
+
+  try {
+    data = await speedTest({
+      acceptLicense: true,
+      acceptGdpr: true,
+      progress,
+      cancel
+    });
+
+    writeData(data, process.hrtime(t));
+  } catch (err) {
+    console.log(err.message);
+  } finally {
+    if (data !== null)
+      console.log('{ download: ' + data.download.bandwidth + ', upload: ' + data.upload.bandwidth + ', ping: ' + data.ping.latency + '}');
+  }
+};

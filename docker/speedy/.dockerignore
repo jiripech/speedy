@@ -1,0 +1,6 @@
+.cache
+.config
+.docs
+.git
+node_modules
+npm-debug.log
