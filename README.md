@@ -5,7 +5,7 @@
 ## About
 
 Your ISP promises great bandwidth and reliability to you, but you don't fully trust?
-Then _speedy_ is the solutio for you. Get more insights what you actually get for the money you pay.
+Then _speedy_ is the solution for you. Get more insights what you actually get for the money you pay.
 
 ![Speed Tracker](./docs/images/speed.png)
 
@@ -47,7 +47,7 @@ $ git clone https://github.com/stefanwalther/speedy
 
 Then run from the root directory:
 ```sh
-$ docker-compose -d up
+$ docker-compose up -d
 ```
 
 This will essentially spin up three Docker containers:
